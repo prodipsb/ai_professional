@@ -1,0 +1,9 @@
+Python is a high-level programming language known for its simple, readable syntax. It was created by Guido van Rossum and first released in 1991. Python is widely used in web development, data science, automation, and artificial intelligence.
+
+Machine learning is a subset of artificial intelligence where systems learn patterns from data instead of being explicitly programmed with rules. Common machine learning tasks include classification, regression, and clustering.
+
+Redis is an open-source, in-memory data structure store. It is often used as a database, cache, and message broker. Redis supports data structures such as strings, hashes, lists, sets, and sorted sets, making it very flexible for different use cases.
+
+The Eiffel Tower was completed in 1889 and was originally built as the entrance arch for the 1889 World's Fair in Paris. It stands about 330 meters tall and was the tallest man-made structure in the world for 41 years.
+
+Docker is a platform that allows developers to package applications into containers. Containers bundle an application with all its dependencies, ensuring it runs consistently across different environments, from a developer's laptop to production servers.
