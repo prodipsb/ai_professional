@@ -1,7 +1,9 @@
-# =======================================================
-# Import the necessary libraries
-# =======================================================
+# ==================================================
+# Import libraries
+# ==================================================
 
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
 from groq import Groq
 from dotenv import load_dotenv
 import json
@@ -11,61 +13,131 @@ load_dotenv()
 client = Groq()
 
 
-# ============================================
-# SAMPLE MESSY JOB POSTING (realistic, unstructured)
-# ============================================
-# job_posting = """
-# We're hiring! TechNova Solutions is looking for a Senior Backend Engineer 
-# to join our growing team. You'll work on our core API infrastructure. 
+# ==================================================
+# Define the schema using Pydantic
+# ==================================================
 
-# Requirements:
-# - 5+ years of experience with Node.js or Python
-# - Strong knowledge of PostgreSQL and Redis
-# - Experience with Docker and AWS
-# - Bachelor's degree preferred but not required
+class JobExtraction(BaseModel):
 
-# This is a hybrid role based in Dhaka, with 2 days/week in office. 
-# Salary range: 80,000 - 120,000 BDT/month depending on experience.
-# Apply by sending your resume to careers@technova.example.com
-# """
+    # Field(...) lets us add extra info like descriptions,
+    # which Pydantic can later use to auto-generate the JSON schema for us
 
-# job_posting = """
-# About the job
-# Company Name: Impressive Security Limited
+    job_title: Optional[str] = Field(None, description="The job title")
+    company: Optional[str] = Field(None, description="The hiring company name")
+    years_of_experience: Optional[int] = Field(None, description="Required years of experience, as a number")
+    required_skills: list[str] = Field(default_factory=list, description="List of technical skills required")
+    salary_range: Optional[str] = Field(None, description="Salary range in mentioned")
 
-# Location: Dhaka (Dhanmondi 27)
+    # Literal restricts this field to ONLY these 3 exact values -
+    # if the LLM tries to return anything else, Pydantic will REJECT it
+    work_mode: Optional[Literal["remote", "hybrid", "onsite"]] = Field(None, description="Work arrangement")
+    location: Optional[str] = Field(None, description="Job location")
 
-# Job Type: Full-Time
 
-# Workplace Type: Full-time
+# ========================================================
+# AUTO GENERATE THE JSON SCHEMA FROM OUR PYDANTIC MODEL
+# ========================================================
 
-# Job ID: IJOB202654322
+# Instead of manually writing out the JSON structure in our prompt 
+# (Like we did in Lesson 1), Pydantic can generate it for us -
+# guaranteeing the prompt and our validation always stay in sync.
 
-# WE'RE HIRING: SENIOR SOFTWARE ENGINEER
+# schema = JobExtraction.model_json_schema()
+# print("Auto-generated schema")
+# print(json.dumps(schema, indent=2))
 
-# Ticket Lagbe Ltd A Sister Concern of Impressive Group is looking for an experienced Senior Software Engineer to join our growing technology team and help build scalable, secure, and high-performance travel technology solutions.
 
-# Technology: Node.js / NestJS
 
-# Key Responsibilities
+# ========================================================
+# BUILD THE PROMPT USING THE AUTO-GENERATED SCHEMA
+# ========================================================
 
-# Design and develop scalable back-end applications using Node.js and NestJS
-# Build and maintain RESTful APIs and third-party integrations
-# Develop flight booking, payment, supplier, and travel-related systems
-# Optimize application performance, security, and database queries
-# Review code and maintain high development standards
-# Troubleshoot production issues and implement reliable solutions
-# Guide junior developers and collaborate with frontend, QA, and DevOps teams
+def build_prompt(job_text):
+    schema = JobExtraction.model_json_schema()
 
-# Requirements
+    prompt = f"""You are a precise data extraction assistant.
 
-# Experience: 5-10 years 
-# Education: 
-# Skills: travel booking systems, ticketing software, airline ticketing, travel booking, technical hiring, airline reservations, flight test engineering, back-end development, archtics ticketing system, job posting 
+TASK: Extract structured information from the job posting below.
 
-# Last Date of Application: 23 August 2026
-# """
+RULES:
+- required_skills should include ALL technical skills mentioned anywhere in the position, listed ONCE each (no duplicates)
+- Keep the list concise - extract distinct technologies/tools only, not every possible phrasing
 
+
+JSON SCHEMA:
+{json.dumps(schema, indent=2)}
+
+JOB POSTING:
+{job_text}
+
+JSON OUTPUT:
+
+"""
+    return prompt
+
+# ========================================================
+# BUILD THE PROMPT USING THE AUTO-GENERATED SCHEMA END
+# ========================================================
+
+
+
+# ========================================================
+# CALL THE LLM AND VALIDATE WITH PYDANTIC
+# ========================================================
+
+def extact_job_info(job_text):
+
+    prompt = build_prompt(job_text)
+
+    # print(f"build prompt: {prompt}")
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        max_tokens=2000,
+        temperature=0,
+        messages=[{ "role": "user", "content": prompt }]
+    )
+
+
+    # print(f"response: {response}")
+
+    # DEBUG - add this before anything else
+    choice = response.choices[0]
+    print(f"DEBUG - finish_reason: {choice.finish_reason}")
+    print(f"DEBUG - raw content: {repr(choice.message.content)}")
+    print("-" * 60)
+
+    raw_output = response.choices[0].message.content
+
+    print(f"LLM response: {raw_output}")
+
+    cleaned = raw_output.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    try:
+        # Parse the raw JSON text info a Python dict first
+        data = json.loads(cleaned)
+
+        # This is the key new step:
+        # JobExtraction(**data) validates the dict against our Pydantic schema.
+        # If ANY field has the wrong type, or work_mode isn't exactly
+        # "remote"/"hybrid"/"onsite", this line will RAISE AN ERROR immediately
+        # - instend of letting bad data silently flow into your application.
+
+        validated = JobExtraction(**data)
+
+        return validated
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing failed: {e}")
+        return None
+    except Exception as e:            # catches Pydantic ValidationError specifically
+        print(f"Schema validation failed: {e}")
+        print(f"Raw data was: {data}")
+        return None
+
+
+# ===================================================
+# TEST IT
+# ===================================================
 
 job_posting = """
 About the job
@@ -127,7 +199,7 @@ Experience with LLM orchestration frameworks such as LangChain, LlamaIndex, or s
 Familiarity with dbt, Airflow, Spark, or other data engineering tools.
 Experience with vector databases or retrieval-augmented generation (RAG) architectures.
 Background in analytics engineering or working closely with BI tools (Tableau, Looker, etc.).
-
+ 
 
 Education:
 
@@ -209,131 +281,24 @@ We may use artificial intelligence (AI) tools to support parts of the hiring pro
 """
 
 
-
- # =======================================================
- # TECHNIQUE 1: STRUCTURE INSTRUCTIONS
- # =======================================================
-
- # Instand of a vague ask, we give the LLM:
- #  - A clear ROLE ("You are a ...")
- #  - A clear TASK (What exactly to do)
- #  - Clear CONSTRAINTS (What format, what to do if data is missing)
- #  - An explicit OUTPUT FORMAT (So parsing it in code is reliable)
-
-
-def build_prompt(job_text):
-    prompt = f"""You are a precise data extraction assistant. Your job is to extract structured information from job postings.
-TASK: Extract the following fields from the job posting below.Groq
-
-RULES:
-- If a field is not mentioned in the text, use null (not "N/A" or empty string)
-- years_of_experience should be a number only (e.g. 5), not text
-- required_skills should be a list of individual skill strings
-- Response with ONLY valid JSON, no explanation, no markdown code blocks
-
-OUTPUT FORMAT (follow this exact structure):
-{{
-    "job_title": string,
-    "company": string,
-    "years_of_experience": number or null,
-    "required_skills": [list of strings],
-    "salary_range": string or null,
-    "work_mode": "remote" | "hybrid" | "onsite" | null,
-    "location": string or null
-}}
-
-
-JOB POSTING:
-{job_text}
-
-
-JSON OUTPUT:
-
-"""
-    return prompt
-
-
-
-# =========================================================
-# CALL THE LLM
-# =========================================================
-
-# def extract_job_info(job_text):
-
-#     prompt = build_prompt(job_text)
-
-#     response = client.chat.completions.create(
-#         model="openai/gpt-oss-20b",
-#         max_tokens=400,
-#         temperature=0,
-#         messages=[{"role": "user", "content": prompt}]
-#     )
-
-#     raw_output = response.choices[0].message.content
-
-#     # The LLM sometimes wraps JSON in markdown code blocks (```json...```)
-#     # even when told not to. This cleans that up just in case.
-#     cleared = raw_output.strip().removeprefix("```json").removeprefix("```").removeprefix("```").strip()
-
-#     # Convert the JSON STRING into an actual Python dictionary
-#     # so we can use it programmatically ( not just print it as text)
-#     try:
-#         parsed = json.loads(cleared)
-#         return parsed
-#     except json.JSONDecodeError as e:
-#         print(f"Failed to parse JSON: {e}")
-#         print(f"Raw output was: {raw_output}")
-#         return None
-
-
-
-def extract_job_info(job_text):
-    prompt = build_prompt(job_text)
-
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        max_tokens=1200,          # increased, just in case
-        temperature=0,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    # NEW: Print diagnostic info BEFORE trying to parse anything
-    choice = response.choices[0]
-    print(f"DEBUG - finish_reason: {choice.finish_reason}")
-    print(f"DEBUG - raw content length: {len(choice.message.content or '')}")
-    print(f"DEBUG - raw content: {repr(choice.message.content)}")
-    print("-" * 60)
-
-    raw_output = choice.message.content
-
-    if not raw_output:
-        print("ERROR: LLM returned empty content!")
-        return None
-
-    cleaned = raw_output.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-
-    try:
-        parsed = json.loads(cleaned)
-        return parsed
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse JSON: {e}")
-        print(f"Raw output was: {raw_output}")
-        return None
-
-
-# ==================================================
-# RUN IT
-# ==================================================
-
-result = extract_job_info(job_posting)
-
-print("Extracted structured data:")
-print(json.dumps(result, indent=2))     # pretty-print the dictionary
-
-
-# Prove it's REAL structured data, not just text - access individual fields
+result = extact_job_info(job_posting)
 
 if result:
-    print(f"\nJust the skills: {result['required_skills']}")
-    print(f"Just the experience requirement: {result['years_of_experience']} years") 
+    print("Validated result (as Pydantic object):")
+    print(result)
+    print()
+
+
+    # New: notice how clean attribute access is now - no more result['job_title],
+    # Just result.job_title - with autocomplete support in your editor too
+
+    print(f"Job Title: {result.job_title}")
+    print(f"Skills: {result.required_skills}")
+    print()
+
+    # BONUS: convert back to a clean dict/JSON anytime you need it
+    print("As JSON:")
+    print(result.model_dump_json(indent=2))
+
+
 
